@@ -1,0 +1,36 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak
+venv.bak
+
+# Databases and Local Data
+chroma_db/
+uploads/*.pdf
+!uploads/.gitkeep
+neo4j_data/
+
+# Node (Frontend)
+node_modules/
+web-ui/node_modules/
+dist/
+web-ui/dist/
+.eslintcache
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
