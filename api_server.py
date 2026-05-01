@@ -159,7 +159,7 @@ async def chat_stream_endpoint(request: ChatRequest) -> StreamingResponse:
             # Step 1: Routing
             route_state = router.route(state)
             state.update(route_state)
-            yield f"data: {json.dumps({'type': 'status', 'value': f'AI ตัดสินใจเลือกเส้นทาง: {state['route_decision']}'})}\n\n"
+            yield f"data: {json.dumps({'type': 'status', 'value': 'AI ตัดสินใจเลือกเส้นทาง: ' + state['route_decision']})}\n\n"
             
             # Step 2: Retrieval
             if state["route_decision"] == "vector":
