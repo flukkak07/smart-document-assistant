@@ -183,13 +183,14 @@ async def chat_stream_endpoint(request: ChatRequest) -> StreamingResponse:
                     sources.append({'file': os.path.basename(src), 'page': pg})
                     seen_sources.add(full_src)
 
-            yield f"data: {json.dumps({
+            metadata_payload = {
                 'type': 'metadata', 
                 'route': state['route_decision'], 
                 'vectorCount': len(state.get('vector_context', [])), 
                 'graphCount': len(state.get('graph_context', [])), 
                 'sources': sources
-            })}\n\n"
+            }
+            yield f"data: {json.dumps(metadata_payload)}\n\n"
             
             # Step 4: Synthesis (Streaming)
             async for token in synthesizer.synthesize_stream(state):
