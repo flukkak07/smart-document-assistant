@@ -133,7 +133,7 @@ class Neo4jGraphStore:
                 "t_name": rel.target_entity.strip(),
             }
             
-            with self.driver.session() as session:
+            with self.driver.session(database=os.getenv("NEO4J_DATABASE", "neo4j")) as session:
                 session.run(query, **params)
 
     def close(self) -> None:

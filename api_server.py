@@ -113,7 +113,7 @@ async def upload_and_index(files: List[UploadFile] = File(...)) -> Dict[str, Any
 
         # 2. ล้างฐานข้อมูลเก่าก่อนเริ่มใหม่ (เพื่อให้ข้อมูลไม่ออกทะเล)
         graph_store = Neo4jGraphStore()
-        with graph_store.driver.session() as session:
+        with graph_store.driver.session(database=os.getenv("NEO4J_DATABASE", "neo4j")) as session:
             session.run("MATCH (n) DETACH DELETE n")
         add_log("ล้างฐานข้อมูลเดิมเรียบร้อย")
 
@@ -227,7 +227,7 @@ async def get_graph_data() -> Dict[str, Any]:
         driver = GraphDatabase.driver(uri, auth=(user, password))
         
         nodes, links = [], []
-        with driver.session() as session:
+        with driver.session(database=os.getenv("NEO4J_DATABASE", "neo4j")) as session:
             node_result = session.run("MATCH (n) RETURN n LIMIT 50")
             for record in node_result:
                 n = record["n"]
@@ -264,7 +264,7 @@ async def get_node_neighbors(node_id: str) -> Dict[str, Any]:
         nodes, links, seen_nodes = [], [], set()
         query = "MATCH (n) WHERE elementId(n) = $node_id MATCH (n)-[r]-(m) RETURN n, r, m LIMIT 50"
         
-        with driver.session() as session:
+        with driver.session(database=os.getenv("NEO4J_DATABASE", "neo4j")) as session:
             result = session.run(query, node_id=node_id)
             for record in result:
                 for k in ["n", "m"]:

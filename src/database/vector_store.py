@@ -59,7 +59,8 @@ class Neo4jVectorStore:
                 username=self.username,
                 password=self.password,
                 index_name=self.index_name,
-                search_type="hybrid" # ใช้ Hybrid Search (Vector + Full-text) เพื่อความแม่นยำ
+                database=os.getenv("NEO4J_DATABASE", "neo4j"), # ดึงจาก ENV
+                search_type="hybrid" 
             )
         return self.vector_store
 
@@ -83,7 +84,8 @@ class Neo4jVectorStore:
             url=self.url,
             username=self.username,
             password=self.password,
-            index_name=self.index_name
+            index_name=self.index_name,
+            database=os.getenv("NEO4J_DATABASE", "neo4j") # ดึงจาก ENV
         )
         print("[Log] บันทึกข้อมูลลง Neo4j Vector Store สำเร็จ")
 

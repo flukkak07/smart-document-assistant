@@ -50,7 +50,7 @@ class RetrieverAgent:
         LIMIT 10
         """
         
-        with self.graph_store.driver.session() as session:
+        with self.graph_store.driver.session(database=os.getenv("NEO4J_DATABASE", "neo4j")) as session:
             records = list(session.run(query))
         
         results = []
