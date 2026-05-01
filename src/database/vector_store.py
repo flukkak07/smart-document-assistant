@@ -1,7 +1,7 @@
 import os
 from typing import List, Optional
 from langchain_neo4j import Neo4jVector
-from langchain_huggingface import HuggingFaceInferenceAPIEmbeddings
+from langchain_huggingface import HuggingFaceEndpointEmbeddings
 from langchain_core.documents import Document
 from dotenv import load_dotenv
 
@@ -13,7 +13,7 @@ class Neo4jVectorStore:
     ใช้สำหรับจัดเก็บและค้นหาข้อมูลเชิงความหมาย (Semantic Search) แทนที่ ChromaDB
     
     Attributes:
-        embeddings (HuggingFaceInferenceAPIEmbeddings): อินสแตนซ์สำหรับเรียกใช้ Embedding API
+        embeddings (HuggingFaceEndpointEmbeddings): อินสแตนซ์สำหรับเรียกใช้ Embedding API
         url (str): URL ของ Neo4j AuraDB
         username (str): ชื่อผู้ใช้งาน Neo4j
         password (str): รหัสผ่าน Neo4j
@@ -32,9 +32,9 @@ class Neo4jVectorStore:
         if not hf_token:
             print("[Warning] ไม่พบ HUGGINGFACE_API_TOKEN ใน Environment Variables")
             
-        self.embeddings = HuggingFaceInferenceAPIEmbeddings(
-            api_key=hf_token,
-            model_name=model_name
+        self.embeddings = HuggingFaceEndpointEmbeddings(
+            model=model_name,
+            huggingfacehub_api_token=hf_token
         )
         
         # 2. ตั้งค่าการเชื่อมต่อฐานข้อมูล

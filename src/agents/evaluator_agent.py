@@ -5,7 +5,7 @@ from ragas import evaluate
 from ragas.metrics import faithfulness, answer_relevancy
 from datasets import Dataset
 from langchain_groq import ChatGroq
-from langchain_huggingface import HuggingFaceInferenceAPIEmbeddings
+from langchain_huggingface import HuggingFaceEndpointEmbeddings
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -17,7 +17,7 @@ class EvaluatorAgent:
     
     Attributes:
         llm (ChatGroq): LLM สำหรับการประเมิน (ใช้รุ่นใหญ่ 70B เพื่อความแม่นยำ)
-        embeddings (HuggingFaceInferenceAPIEmbeddings): เวกเตอร์สำหรับคำนวณความ relevancy
+        embeddings (HuggingFaceEndpointEmbeddings): เวกเตอร์สำหรับคำนวณความ relevancy
     """
 
     def __init__(self) -> None:
@@ -29,9 +29,9 @@ class EvaluatorAgent:
         )
         
         # ใช้ Embeddings API แบบเดียวกับ Vector Store
-        self.embeddings = HuggingFaceInferenceAPIEmbeddings(
-            api_key=os.getenv("HUGGINGFACE_API_TOKEN"),
-            model_name=os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+        self.embeddings = HuggingFaceEndpointEmbeddings(
+            huggingfacehub_api_token=os.getenv("HUGGINGFACE_API_TOKEN"),
+            model=os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
         )
 
     def evaluate_response(self, question: str, answer: str, contexts: List[str]) -> Dict[str, Any]:
