@@ -1,117 +1,155 @@
 import os
 import fitz  # PyMuPDF
-import pytesseract
+import base64
+import io
+from typing import List, Optional
 from PIL import Image
-from typing import List
 from dotenv import load_dotenv
+from langchain_groq import ChatGroq
+from langchain_core.messages import HumanMessage
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
 
-# โหลดค่าคอนฟิกเพื่อตรวจสอบว่ามีพาท Tesseract หรือไม่
 load_dotenv()
-# เช็คใน .env ก่อน ถ้าไม่มี ให้ลองหาที่ C:\Program Files\Tesseract-OCR\tesseract.exe เป็นหลัก
-tesseract_path = os.getenv("TESSERACT_CMD_PATH", r"C:\Program Files\Tesseract-OCR\tesseract.exe")
-
-if tesseract_path and os.path.exists(tesseract_path):
-    pytesseract.pytesseract.tesseract_cmd = tesseract_path
-else:
-    print(f"[Warning] ไม่พบโปรแกรม Tesseract ในเครื่องที่พาท: {tesseract_path} (กรุณาตรวจสอบการติดตั้ง Tesseract-OCR)")
 
 class DocumentProcessor:
     """
-    คลาสจัดการเอกสาร PDF พร้อมระบบ Fallback เป็น OCR (วิเคราะห์แสกนข้อความรูปภาพ)
-    เมื่อเจอไฟล์ PDF สแกน (รูปแบบรูปหน้ากระดาษ)
+    คลาสสำหรับประมวลผลเอกสาร PDF ทั้งแบบข้อความปกติและแบบสแกน (OCR)
+    โดยใช้ Groq Vision API สำหรับการทำ OCR แทน Tesseract เพื่อรองรับการทำงานบน Cloud
     """
+
     def __init__(self, chunk_size: int = 1000, chunk_overlap: int = 200) -> None:
+        """
+        เริ่มต้นการตั้งค่าสำหรับการหั่นข้อความและเชื่อมต่อกับ Vision AI
+        """
         self.text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
             separators=["\n\n", "\n", " ", ""]
         )
+        
+        # ตั้งค่าโมเดล Vision สำหรับทำ OCR
+        self.vision_model = ChatGroq(
+            model="llama-3.2-11b-vision-preview",
+            temperature=0.0
+        )
 
-    def _ocr_pdf_with_pymupdf(self, file_path: str) -> List[Document]:
+    def _ocr_with_vision_ai(self, file_path: str) -> List[Document]:
         """
-        โหมดปฏิบัติการ OCR: หั่น PDF เป็นภาพทีละหน้าแล้วสั่ง Tesseract อ่านข้อความไทย+อังกฤษ
+        ใช้ Vision AI ในการอ่านข้อความจากไฟล์ PDF (โหมด OCR)
+        โดยการแปลงหน้า PDF เป็นรูปภาพและส่งให้ AI วิเคราะห์
+        
+        Args:
+            file_path (str): พาธของไฟล์ PDF
+            
+        Returns:
+            List[Document]: รายการเอกสารที่สกัดข้อความออกมาแล้ว
         """
-        print(f"[OCR Mode] กำลังเริ่มถอดรหัสรูปภาพในเอกสาร: {os.path.basename(file_path)}...")
+        print(f"[Vision OCR] กำลังวิเคราะห์เอกสารด้วย AI: {os.path.basename(file_path)}...")
         doc = fitz.open(file_path)
-        documents = []
+        documents: List[Document] = []
         
         for page_num in range(len(doc)):
             page = doc.load_page(page_num)
-            # ปรับเพิ่ม DPI (ความคมชัด) เล็กน้อยให้ OCR อ่านได้แม่นยำขึ้น
+            # แปลงหน้า PDF เป็นรูปภาพ (Base64)
             pix = page.get_pixmap(dpi=150)
-            
-            # แปลงภาพของ PyMuPDF เป็นรูปแบบ Pillow Image ที่ pytesseract เข้าใจ
-            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+            img_data = pix.tobytes("jpg")
+            base64_image = base64.b64encode(img_data).decode('utf-8')
             
             try:
-                # รัน OCR ด้วยคำสั่งดึงภาษาไทย (tha) และอังกฤษ (eng)
-                text = pytesseract.image_to_string(img, lang='tha+eng')
-                # กรองคำผิดปกติจากการแสกนหน้าเปล่าทิ้งไป
-                text = text.strip()
+                # ส่งภาพให้ Groq Vision อ่าน
+                prompt = "Extract all text from this document image accurately. The text is in Thai and English. Return only the extracted text without any explanations."
+                message = HumanMessage(
+                    content=[
+                        {"type": "text", "text": prompt},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"},
+                        },
+                    ]
+                )
                 
-                # จำลองโครงสร้างให้เหมือนการโหลด LangChain ปกติ
-                doc_metadata = {"source": file_path, "page": page_num}
-                documents.append(Document(page_content=text, metadata=doc_metadata))
+                response = self.vision_model.invoke([message])
+                text = response.content.strip()
+                
+                if text:
+                    doc_metadata = {"source": file_path, "page": page_num + 1}
+                    documents.append(Document(page_content=text, metadata=doc_metadata))
+                    print(f"  + อ่านหน้าที่ {page_num + 1} สำเร็จ")
                 
             except Exception as e:
-                print(f"[Error] พบข้อผิดพลาดขณะทำ OCR หน้าที่ {page_num + 1}: {e}")
+                print(f"[Error] พบข้อผิดพลาดในหน้าที่ {page_num + 1}: {str(e)}")
                 
         doc.close()
         return documents
 
     def load_pdf(self, file_path: str) -> List[Document]:
         """
-        โหลดไฟล์ PDF ชิ้นเดียว (ใช้ PyPDFLoader ปกติ ถ้าเป็นหน้าเปล่า/แสกน จะสลับไปใช้ OCR อัตโนมัติ)
+        โหลดไฟล์ PDF และตรวจสอบว่าต้องใช้โหมด OCR หรือไม่
+        
+        Args:
+            file_path (str): พาธของไฟล์ PDF
+            
+        Returns:
+            List[Document]: ข้อมูลเนื้อหาในแต่ละหน้า
         """
         if not os.path.exists(file_path):
-             raise FileNotFoundError(f"ไม่พบไฟล์ PDF ที่ระบุ: {file_path}")
-             
-        # ขั้นที่ 1: พยายามอ่านแบบปกติอย่างรวดเร็วก่อน
+            raise FileNotFoundError(f"ไม่พบไฟล์: {file_path}")
+
+        # ขั้นแรก: ลองโหลดแบบปกติ (Digital PDF)
         loader = PyPDFLoader(file_path)
         documents = loader.load()
         
-        # ตรวจสอบว่าหลังจากอ่านทั้งหมดแล้ว แทบไม่มีข้อความเลย (แปลว่าเป็นไฟล์รูป/แสกน)
-        total_text_length = sum(len(d.page_content.strip()) for d in documents)
+        # ตรวจสอบความยาวข้อความรวมเพื่อประเมินว่าเป็นไฟล์แสกนหรือไม่
+        total_text = "".join([d.page_content.strip() for d in documents])
         
-        # ถ้ายาวไม่ถึง 50 ตัวอักษรทั้งเล่ม สันนิษฐานเอาไว้ก่อนว่าถูกเซฟมาแบบฝังรูป
-        if total_text_length < 50:
-            print(f"[Warning] ตรวจพบเอกสารแสกน! ระบบปกติดึงข้อความไม่ได้ จะทำการสลับเข้าโหมด OCR")
-            # ฝากภาระให้ Tesseract ช่วยอ่าน
-            documents = self._ocr_pdf_with_pymupdf(file_path)
+        if len(total_text) < 100:
+            print(f"[Warning] ตรวจพบไฟล์แสกนหรือข้อความน้อยผิดปกติ กำลังสลับไปใช้ Vision OCR...")
+            documents = self._ocr_with_vision_ai(file_path)
             
         return documents
 
     def process_document(self, file_path: str) -> List[Document]:
         """
-        โหลดและหั่น (Split) ทันที พร้อมเก็บ Metadata ของหน้า
+        โหลดและหั่นเอกสารเป็นก้อน (Chunks) พร้อมใช้งาน
+        
+        Args:
+            file_path (str): พาธของไฟล์ PDF
+            
+        Returns:
+            List[Document]: รายการ Chunks ที่หั่นเรียบร้อยแล้ว
         """
-        print(f"[Log] กำลังอ่านไฟล์: {file_path}")
+        print(f"[Log] เริ่มประมวลผลไฟล์: {os.path.basename(file_path)}")
         documents = self.load_pdf(file_path)
         
+        # กรองเอาเฉพาะหน้าที่มีข้อความ
         valid_docs = [doc for doc in documents if doc.page_content.strip()]
         
         if not valid_docs:
-             print(f"[Failed] ไม่สามารถหั่นข้อความได้ เนื่องจากเอกสารไม่มีตัวหนังสือที่อ่านออกเลย")
-             return []
-             
-        print(f"[Log] อ่านเสร็จ จำนวนทั้งหมด {len(documents)} หน้า กำลังหั่นข้อความ...")
+            print("[Failed] ไม่พบข้อความในเอกสารนี้")
+            return []
+            
+        print(f"[Log] อ่านเสร็จสิ้น ({len(valid_docs)} หน้า) กำลังหั่นเป็น Chunks...")
         chunks = self.text_splitter.split_documents(valid_docs)
         
-        print(f"[Log] หั่นข้อความสำเร็จ ได้จำนวนทั้งหมด {len(chunks)} Chunks")
+        print(f"[Log] ประมวลผลสำเร็จ ได้ {len(chunks)} chunks")
         return chunks
-        
+
     def process_directory(self, folder_path: str) -> List[Document]:
         """
-        ฟังก์ชันสำหรับกวาดโหลดไฟล์ PDF ทั้งหมดในโฟลเดอร์
+        ประมวลผลไฟล์ PDF ทั้งหมดในโฟลเดอร์ที่กำหนด
+        
+        Args:
+            folder_path (str): พาธของโฟลเดอร์
+            
+        Returns:
+            List[Document]: รายการ Chunks ทั้งหมดจากทุกไฟล์
         """
-        all_chunks = []
+        all_chunks: List[Document] = []
         if not os.path.exists(folder_path):
-             os.makedirs(folder_path)
-             print(f"[Log] ไม่พบโฟลเดอร์ {folder_path} จึงสร้างโฟลเดอร์รอกดออมข้อมูลไฟล์ให้")
-             return all_chunks
+            os.makedirs(folder_path)
+            return all_chunks
 
         for filename in os.listdir(folder_path):
             if filename.lower().endswith(".pdf"):
@@ -122,11 +160,8 @@ class DocumentProcessor:
         return all_chunks
 
 if __name__ == "__main__":
-    print("ทดสอบระบบ Document Loader (พร้อมฟีเจอร์ช่วยอ่านภาษาไทยแบบ OCR)")
+    # สำหรับทดสอบการทำงานเบื้องต้น
     processor = DocumentProcessor()
-    
-    sample_dir = "data"
-    chunks = processor.process_directory(sample_dir)
-    print(f"รวม Chunk ทั้งหมดในระบบ: {len(chunks)}")
-    if chunks:
-         print(f"ตัวอย่างประโยคชิ้นแรก: '{chunks[0].page_content[:150]}...' [หน้า {chunks[0].metadata.get('page')}]")
+    # ใส่พาธไฟล์ทดสอบที่นี่
+    # chunks = processor.process_document("path/to/your/test.pdf")
+    # print(f"Total chunks: {len(chunks)}")

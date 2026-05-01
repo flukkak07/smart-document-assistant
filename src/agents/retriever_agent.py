@@ -1,6 +1,6 @@
 from typing import Dict, Any, List
 from src.agents.state import AgentState
-from src.database.vector_store import ChromaVectorStore
+from src.database.vector_store import Neo4jVectorStore
 from src.database.graph_store import Neo4jGraphStore
 
 class RetrieverAgent:
@@ -12,7 +12,7 @@ class RetrieverAgent:
         โหลดอินสแตนซ์ของ ChromaDB และ Neo4j ทิ้งไว้เพื่อรอรับคำสั่งค้นหา
         """
         # โหลดการเชื่อมต่อ Database ทิ้งไว้ 
-        self.vector_store = ChromaVectorStore()
+        self.vector_store = Neo4jVectorStore()
         self.graph_store = Neo4jGraphStore()
 
     def retrieve_vector(self, state: AgentState) -> Dict[str, Any]:
@@ -25,7 +25,7 @@ class RetrieverAgent:
         Returns:
             Dict[str, Any]: Dictionary เพื่ออัปเดตช่อง vector_context
         """
-        print("[Vector Retriever] 📄 กำลังค้นหาข้อมูลเอกสารจาก ChromaDB...")
+        print("[Vector Retriever] 📄 กำลังค้นหาข้อมูลเอกสารจาก Neo4j Vector...")
         results = self.vector_store.similarity_search(state["question"], k=3)
         print(f"[Vector Retriever] ✅ พบเอกสารที่ใกล้เคียงจำนวน {len(results)} ชิ้น")
         return {"vector_context": results}

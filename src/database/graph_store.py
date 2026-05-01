@@ -1,104 +1,119 @@
 import os
-from typing import List
+from typing import List, Optional, Callable
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 
 from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
-from neo4j import GraphDatabase
+from neo4j import GraphDatabase, Driver
 from langchain_core.documents import Document
 
-# โหลดค่าคอนฟิก 
 load_dotenv()
 
-# ==========================================
-# 1. นิยามโครงสร้าง Pydantic สำหรับบังคับให้ AI โยน JSON ที่มีระเบียบมาให้เรา
-# ==========================================
 class KnowledgeRelation(BaseModel):
-    source_entity: str = Field(description="ชื่อสิ่งของ/บุคคลต้นทาง (ภาษาไทย) เช่น เคน, มหาวิทยาลัยเกษตรศาสตร์")
-    source_type: str = Field(description="ประเภทของ Entity ต้นทาง เช่น PERSON, ORGANIZATION, LOCATION")
-    relationship: str = Field(description="ความสัมพันธ์กริยาภาษาอังกฤษตัวพิมพ์ใหญ่ เช่น WORKS_AT, STUDIES")
-    target_entity: str = Field(description="ชื่อสิ่งของ/บุคคลปลายทาง (ภาษาไทย) เช่น คณะวิทยาศาสตร์")
-    target_type: str = Field(description="ประเภทของ Entity ปลายทาง เช่น ORGANIZATION, LOCATION")
+    """นิยามโครงสร้างความสัมพันธ์ของข้อมูล"""
+    source_entity: str = Field(description="ชื่อสิ่งของ/บุคคลต้นทาง (ภาษาไทย)")
+    source_type: str = Field(description="ประเภทของ Entity ต้นทาง (ภาษาอังกฤษตัวพิมพ์ใหญ่)")
+    relationship: str = Field(description="ความสัมพันธ์กริยา (ภาษาอังกฤษตัวพิมพ์ใหญ่)")
+    target_entity: str = Field(description="ชื่อสิ่งของ/บุคคลปลายทาง (ภาษาไทย)")
+    target_type: str = Field(description="ประเภทของ Entity ปลายทาง (ภาษาอังกฤษตัวพิมพ์ใหญ่)")
 
 class KnowledgeGraph(BaseModel):
-    relations: List[KnowledgeRelation] = Field(description="รายการความสัมพันธ์ทั้งหมดที่สกัดมาจากข้อความ")
+    """โครงสร้างรายการความสัมพันธ์ที่สกัดได้"""
+    relations: List[KnowledgeRelation] = Field(description="รายการความสัมพันธ์ทั้งหมด")
 
-
-# ==========================================
-# 2. คลาสหลักสำหรับการวาดกราฟความสัมพันธ์
-# ==========================================
 class Neo4jGraphStore:
     """
-    คลาสรับหน้าที่รับ Chunk มาตีความหาคู่หู Entity ผ่าน LLM
-    ก่อนจะสร้าง Cypher Query และวาดลงกระดานฐานข้อมูล 
+    คลาสสำหรับจัดการ Knowledge Graph บน Neo4j AuraDB
+    ทำหน้าที่สกัดความสัมพันธ์จากข้อความด้วย LLM และบันทึกลงใน Graph Database
+    
+    Attributes:
+        driver (Driver): Neo4j Driver สำหรับเชื่อมต่อฐานข้อมูล
+        llm (ChatGroq): อินสแตนซ์ของ LLM สำหรับการสกัดข้อมูล
+        extractor (Callable): ฟังก์ชันสำหรับสกัดข้อมูลตามโครงสร้างที่กำหนด
+        logger (Optional[Callable]): ฟังก์ชันสำหรับส่ง Log ไปยัง UI
     """
-    def __init__(self):
-        # 1. เชื่อมต่อฐานข้อมูลด้วย Neo4j Driver แท้ (หลบเลี่ยง LangChain Neo4j APOC)
-        self.driver = GraphDatabase.driver(
-            os.getenv("NEO4J_URI", "neo4j://127.0.0.1:7687"),
-            auth=(os.getenv("NEO4J_USERNAME", "neo4j"), os.getenv("NEO4J_PASSWORD"))
-        )
+
+    def __init__(self) -> None:
+        """
+        เริ่มต้นการเชื่อมต่อ Neo4j และตั้งค่า LLM Chain
+        """
+        # 1. เชื่อมต่อ Neo4j Cloud
+        uri: Optional[str] = os.getenv("NEO4J_URI")
+        user: str = os.getenv("NEO4J_USERNAME", "neo4j")
+        password: Optional[str] = os.getenv("NEO4J_PASSWORD")
         
-        # 2. เชื่อมต่อ LLM อัจฉริยะ (ใช้โหมดแบบไม่สร้างสรรค์ เพื่อเน้นสกัดข้อมูลแฟคท์)
+        if not uri or not password:
+            print("[Warning] ข้อมูลการเชื่อมต่อ Neo4j ไม่ครบถ้วนใน .env")
+            
+        print(f"[Log] กำลังเชื่อมต่อ Neo4j Graph ที่: {uri}")
+        self.driver: Driver = GraphDatabase.driver(uri, auth=(user, password))
+        
+        # 2. ตั้งค่า LLM (Groq) เพื่อใช้สกัดข้อมูล
         self.llm = ChatGroq(
             model="llama-3.1-8b-instant",
             temperature=0.0,
             max_tokens=2048,
         )
         
-        # 3. ผูก LLM เข้ากับฟังก์ชันวิเคราะห์ Pydantic ข้อมูลจะได้ไม่เบี้ยว
+        # 3. เตรียม Prompt และ Chain สำหรับการสกัดความสัมพันธ์
         self.extractor = self.llm.with_structured_output(KnowledgeGraph)
-        self.logger = None  # จะถูกตั้งค่าโดย API Server
+        self.logger: Optional[Callable[[str], None]] = None
         
-        # 4. Prompt พลังสูง สั่งการ AI ดึงความสัมพันธ์แบบชัดเจน
         self.prompt = ChatPromptTemplate.from_messages([
             ("system", """คุณคือผู้เชี่ยวชาญด้าน Data Extraction จากเอกสารภาษาไทย 
 หน้าที่ของคุณคือ สกัด "ความสัมพันธ์" เป็นคู่ๆ จากข้อความที่ให้มา
 โดยแปลงออกมาให้ตรงตาม Schema ที่กำหนด เงื่อนไขสำคัญคือ:
 1. source_type และ target_type จะต้องเป็นภาษาอังกฤษตัวพิมพ์ใหญ่ เช่น PERSON, ORGANIZATION, ROLE, SKILL
 2. relationship ให้เป็นคำกริยาภาษาอังกฤษตัวพิมพ์ใหญ่แบบติดกัน เช่น WORKS_AT, HAS_SKILL, INCLUDES
-3. ชื่อ Entity (source_entity, target_entity) ให้เป็นคำภาษาไทยแบบสั้นกระชับที่สุด ตามตัวอักษรของจริง ไม่เอาประโยคยาวๆ
+3. ชื่อ Entity (source_entity, target_entity) ให้เป็นคำภาษาไทยแบบสั้นกระชับที่สุด
 หากไม่มีความสัมพันธ์ที่ชัดเจน ไม่ต้องสุ่มสร้างขึ้นมา"""),
-            ("human", "ข้อความ:\n{text}")
+            ("human", "ข้อความสำหรับการสกัด:\n{text}")
         ])
         
         self.chain = self.prompt | self.extractor
 
     def process_and_save(self, chunks: List[Document]) -> None:
         """
-        สกัดข้อความทีละ Chunk แล้วบันทึกลง Neo4j ทันที
+        ประมวลผลก้อนข้อมูล (Chunks) เพื่อสกัดความสัมพันธ์และบันทึกลงฐานข้อมูล
+        
+        Args:
+            chunks (List[Document]): รายการก้อนข้อมูลที่ต้องการประมวลผล
         """
-        print(f"\n[Log] เตรียมสกัดและบันทึก Knowledge Graph จาก {len(chunks)} Chunks")
+        print(f"\n[Graph Indexing] เริ่มสกัดความสัมพันธ์จาก {len(chunks)} Chunks...")
         
         for i, chunk in enumerate(chunks):
-            msg = f"กำลังประมวลผล Chunk {i+1}/{len(chunks)} ด้วย LLM..."
-            print(msg)
-            if self.logger: self.logger(msg)
+            status_msg = f"กำลังวิเคราะห์ Chunk {i+1}/{len(chunks)}..."
+            print(status_msg)
+            if self.logger: 
+                self.logger(status_msg)
+                
             try:
-                # ให้ AI วิเคราะห์โครงสร้าง
+                # เรียกใช้ LLM เพื่อสกัดข้อมูล
                 graph_data = self.chain.invoke({"text": chunk.page_content})
                 
-                # นำข้อมูลที่ได้ มาแปลงเป็น Cypher ยิงเข้าฐาน
                 if graph_data and graph_data.relations:
-                    self._save_to_neo4j(graph_data.relations)
-                    msg = f"  + ภารกิจสำเร็จ: วาด {len(graph_data.relations)} เส้นความสัมพันธ์ลง Neo4j"
-                    print(msg)
-                    if self.logger: self.logger(msg)
+                    self._save_relations(graph_data.relations)
+                    success_msg = f"  + บันทึกแล้ว {len(graph_data.relations)} ความสัมพันธ์"
+                    print(success_msg)
+                    if self.logger: self.logger(success_msg)
                 else:
-                    msg = f"  - ข้าม: ไม่พบความแข็งแรงของความสัมพันธ์ที่ชัดเจนในก้อนนี้ (Chunk {i+1})"
-                    print(msg)
-                    if self.logger: self.logger(msg)
+                    print(f"  - ไม่พบความสัมพันธ์ที่ชัดเจนใน Chunk {i+1}")
                     
             except Exception as e:
-                print(f"[Error] Chunk {i+1} ขัดข้องระหว่างการแยกแยะ: {e}")
+                error_msg = f"[Error] การสกัดข้อมูลใน Chunk {i+1} ล้มเหลว: {str(e)}"
+                print(error_msg)
+                if self.logger: self.logger(error_msg)
 
-    def _save_to_neo4j(self, relations: List[KnowledgeRelation]) -> None:
+    def _save_relations(self, relations: List[KnowledgeRelation]) -> None:
         """
-        แปลงข้อมูล Object ให้กลายเป็นภาษา Cypher ของ Neo4j (ใช้ MERGE ป้องกันข้อมูลซ้ำ)
+        บันทึกข้อมูลความสัมพันธ์ลงใน Neo4j (Internal use)
+        
+        Args:
+            relations (List[KnowledgeRelation]): รายการความสัมพันธ์ที่สกัดได้
         """
         for rel in relations:
-            # คลีนชื่อประเภทให้ปลอดภัยสำหรับการเป็น Label
+            # คลีนข้อมูล Label และ Relationship Name
             s_type = rel.source_type.replace(" ", "_").upper()
             t_type = rel.target_type.replace(" ", "_").upper()
             r_name = rel.relationship.replace(" ", "_").upper()
@@ -106,10 +121,7 @@ class Neo4jGraphStore:
             if not s_type or not t_type or not r_name:
                 continue
                 
-            # คำสั่ง Cypher 
-            # (MERGE a) คือสร้าง/หาโหนด a
-            # (MERGE b) คือสร้าง/หาโหนด b
-            # (MERGE a->b) เพื่อจับคู่
+            # ใช้ MERGE เพื่อป้องกันข้อมูลซ้ำซ้อน
             query = f"""
             MERGE (a:{s_type} {{id: $s_name}})
             MERGE (b:{t_type} {{id: $t_name}})
@@ -122,4 +134,9 @@ class Neo4jGraphStore:
             }
             
             with self.driver.session() as session:
-                session.run(query, **params)    
+                session.run(query, **params)
+
+    def close(self) -> None:
+        """ปิดการเชื่อมต่อฐานข้อมูล"""
+        if self.driver:
+            self.driver.close()

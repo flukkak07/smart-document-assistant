@@ -1,0 +1,31 @@
+name: Neo4j Keep Alive
+
+on:
+  schedule:
+    # รันทุกๆ 2 วัน ในเวลา 00:00 UTC (ประมาณ 07:00 เวลาไทย)
+    - cron: '0 0 */2 * *'
+  workflow_dispatch: # ยอมให้กดรันเองได้ด้วยมือผ่านหน้า GitHub Actions
+
+jobs:
+  ping-db:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install neo4j python-dotenv
+
+      - name: Run keep-alive script
+        env:
+          # ตัวแปรพวกนี้คุณต้องไปตั้งค่าใน GitHub Repo -> Settings -> Secrets and Variables -> Actions
+          NEO4J_URI: ${{ secrets.NEO4J_URI }}
+          NEO4J_USERNAME: ${{ secrets.NEO4J_USERNAME }}
+          NEO4J_PASSWORD: ${{ secrets.NEO4J_PASSWORD }}
+        run: python scripts/keep_alive.py

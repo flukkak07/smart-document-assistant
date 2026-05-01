@@ -1,5 +1,5 @@
 import os
-from typing import Literal, Dict, Any
+from typing import Literal, Dict, Any, Optional
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 
@@ -10,21 +10,24 @@ from src.agents.state import AgentState
 load_dotenv()
 
 class RouteDecision(BaseModel):
+    """นิยามผลลัพธ์การตัดสินใจเลือกเส้นทาง"""
     decision: Literal["vector", "graph", "both"] = Field(
-        description="การตัดสินใจเลือกเส้นทางค้นหา ('vector' สำหรับข้อมูลเนื้อหา/ความหมาย, 'graph' สำหรับความสัมพันธ์/ใครทำอะไร, 'both' ถ้าต้องใช้ร่วมกัน)"
+        description="เส้นทางค้นหา: 'vector' (เนื้อหา), 'graph' (ความสัมพันธ์), 'both' (ทั้งคู่)"
     )
 
 class RouterAgent:
     """
-    Agent ผู้ทำหน้าที่เป็นหัวหน้าแผนก คอยตัดสนใจว่าคำถามนี้ควรมอบหมายให้ 
-    Vector Database (หาข้อมูลลึก) หรือ Graph Database (หาความสัมพันธ์) เป็นคนทำ
+    เอเจนท์ผู้วางแผนเส้นทาง (Router) ทำหน้าที่วิเคราะห์คำถาม
+    เพื่อตัดสินใจว่าจะดึงข้อมูลจาก Vector Database หรือ Knowledge Graph
+    
+    Attributes:
+        llm (ChatGroq): อินสแตนซ์ของ LLM สำหรับการตัดสินใจ
+        router (Callable): ฟังก์ชันสกัดโครงสร้างการตัดสินใจ
     """
+
     def __init__(self) -> None:
-        """
-        เตรียมความพร้อมเชื่อมต่อ Groq API LLM สำหรับตัดสินใจเลือกเส้นทาง
-        """
+        """เริ่มต้นการตั้งค่า Router Agent"""
         self.llm = ChatGroq(model="llama-3.1-8b-instant", temperature=0)
-        # บังคับคำตอบออกให้เป็น JSON Pydantic เท่านั้น
         self.router = self.llm.with_structured_output(RouteDecision)
         
         self.prompt = ChatPromptTemplate.from_messages([
@@ -34,27 +37,27 @@ class RouterAgent:
 - 'graph': ถ้าคำถามเกี่ยวกับความสัมพันธ์ เช่น ใครทำอะไร, เรียนที่ไหน, มีหน้าที่อะไร, เกี่ยวข้องกับใคร
 - 'both': ถ้าคำถามซับซ้อนและรวมทั้งสองอย่าง
 ถ้าไม่แน่ใจให้เลือก 'both' เสมอ เพื่อความปลอดภัยของข้อมูล"""),
-            ("human", "คำถาม: {question}")
+            ("human", "คำถามที่ต้องการวิเคราะห์: {question}")
         ])
         self.chain = self.prompt | self.router
 
     def route(self, state: AgentState) -> Dict[str, Any]:
         """
-        อ่านคำถามจาก State ปัจจุบันและตัดสินผลลัพธ์ผ่าน LLM 
+        วิเคราะห์คำถามจาก State และระบุเส้นทางที่เหมาะสม
         
         Args:
-            state (AgentState): ตัวแปรกล่องความจำที่เก็บโครงสร้างข้อมูลทั้งหมดเอาไว้
+            state (AgentState): สถานะปัจจุบันของกระบวนการทำงาน
             
         Returns:
-            Dict[str, Any]: คืนค่าออฟเจกต์เป็นส่วนย่อย (dict) เพื่อให้อัปเดต State ตรง field 'route_decision'
+            Dict[str, Any]: ผลลัพธ์การตัดสินใจเพื่ออัปเดตลงใน State
         """
         print("\n[Router Agent] 🧠 กำลังวิเคราะห์เจตนาของคำถาม...")
         try:
-            decision = self.chain.invoke({"question": state["question"]})
-            path = decision.decision
-        except Exception:
-            # Fallback หาก LLM รุ่นเล็กรวน ให้เลือก both ป้องกันข้อมูลหาย
+            result = self.chain.invoke({"question": state["question"]})
+            path = result.decision if result else "both"
+        except Exception as e:
+            print(f"[Router Agent] Error: {str(e)} - สลับไปใช้โหมด 'both' เพื่อความปลอดภัย")
             path = "both"
             
-        print(f"[Router Agent] 🚦 ตัดสินใจส่งคำถามไปที่เส้นทาง: {path.upper()}")
+        print(f"[Router Agent] 🚦 เส้นทางที่เลือก: {path.upper()}")
         return {"route_decision": path}

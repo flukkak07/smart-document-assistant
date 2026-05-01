@@ -28,6 +28,7 @@ import ForceGraph2D from 'react-force-graph-2d';
 import axios from 'axios';
 import { uploadFiles, fetchGraphData } from './api';
 import PdfViewer from './PdfViewer';
+import API_URL from './config';
 
 function App() {
   const [activeTab, setActiveTab] = useState('chat');
@@ -75,7 +76,7 @@ function App() {
     if (isUploading) {
       interval = setInterval(async () => {
         try {
-          const resp = await axios.get('http://localhost:8000/api/indexing-status');
+          const resp = await axios.get(`${API_URL}/api/indexing-status`);
           setLogs(resp.data.logs);
         } catch (err) {
           console.error("Polling error:", err);
@@ -96,7 +97,7 @@ function App() {
     setIsUploading(true);
     setLogs(["[System] กำลังเตรียมการอัปโหลด..."]);
     try {
-      await axios.get('http://localhost:8000/api/clear-logs');
+      await axios.get(`${API_URL}/api/clear-logs`);
       await uploadFiles(files);
       setIndexed(true);
       const gd = await fetchGraphData();
@@ -120,7 +121,7 @@ function App() {
     const currentQuestion = input;
 
     try {
-      const response = await fetch('http://localhost:8000/api/chat-stream', {
+      const response = await fetch(`${API_URL}/api/chat-stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: currentQuestion })
@@ -180,7 +181,7 @@ function App() {
     
     setIsEvaluating(msgIdx);
     try {
-      const resp = await axios.post('http://localhost:8000/api/evaluate', {
+      const resp = await axios.post(`${API_URL}/api/evaluate`, {
         question: msg.metadata.question || "",
         answer: msg.content,
         contexts: msg.metadata.contexts
@@ -200,7 +201,7 @@ function App() {
 
   const expandNode = async (node) => {
     try {
-      const resp = await axios.get(`http://localhost:8000/api/graph/neighbors/${node.id}`);
+      const resp = await axios.get(`${API_URL}/api/graph/neighbors/${node.id}`);
       const { nodes: newNodes, links: newLinks } = resp.data;
       setGraphData(prev => {
         const existingNodeIds = new Set(prev.nodes.map(n => n.id));
@@ -221,7 +222,7 @@ function App() {
     setNodeDetails(null);
     setIsLoadingDetails(true);
     try {
-      const resp = await axios.get(`http://localhost:8000/api/graph/node-details/${node.id}`);
+      const resp = await axios.get(`${API_URL}/api/graph/node-details/${node.id}`);
       setNodeDetails(resp.data);
     } catch (err) { } finally { setIsLoadingDetails(false); }
   };
@@ -274,7 +275,7 @@ function App() {
   };
 
   const openPdf = (file, page) => {
-    setViewerConfig({ isOpen: true, fileUrl: `http://localhost:8000/pdf-files/${file}`, page, fileName: file });
+    setViewerConfig({ isOpen: true, fileUrl: `${API_URL}/pdf-files/${file}`, page, fileName: file });
   };
 
   const ConfidenceBar = ({ label, score, color }) => (

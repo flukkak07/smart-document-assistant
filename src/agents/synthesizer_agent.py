@@ -1,18 +1,20 @@
-from typing import Dict, Any
+from typing import Dict, Any, AsyncGenerator
 from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
 from src.agents.state import AgentState
 
 class SynthesizerAgent:
     """
-    Agent ผู้พิทักษ์ด่านสุดท้าย: หน้าที่คือนำซากข้อมูลดิบๆ (Vector + Graph) ทั้งหมด
-    มารวมกับคำถามของผู้ใช้ และแต่งประโยคอธิบายใหม่ให้เป็นภาษาคน สละสลวย
+    เอเจนท์ผู้รวบรวมเนื้อหา (Synthesizer) ทำหน้าที่นำข้อมูลจากทุกแหล่ง (Vector + Graph)
+    มาสังเคราะห์และเรียบเรียงเป็นคำตอบที่สละสลวยและแม่นยำ
+    
+    Attributes:
+        llm (ChatGroq): อินสแตนซ์ของ LLM สำหรับการสรุปเนื้อหา
+        prompt (ChatPromptTemplate): แม่แบบข้อความสำหรับการสั่งการ AI
     """
+
     def __init__(self) -> None:
-        """
-        เตรียมพร้อมเชื่อมต่อ LLM เพื่อใช้ปะติดปะต่อเนื้อหาเป็นภาษาเขียนธรรมชาติ
-        โดยอิงตามบริบทเท่านั้น
-        """
+        """เริ่มต้นการตั้งค่า Synthesizer Agent"""
         self.llm = ChatGroq(model="llama-3.1-8b-instant", temperature=0.5)
         self.prompt = ChatPromptTemplate.from_messages([
             ("system", """คุณคือปัญญาประดิษฐ์ผู้ช่วยระดับมันสมอง (Synthesizer Agent)
@@ -33,63 +35,53 @@ class SynthesizerAgent:
 
 เรียบเรียงคำตอบของคุณ:""")
         ])
-        
         self.chain = self.prompt | self.llm
 
-    def synthesize(self, state: AgentState) -> Dict[str, Any]:
-        """
-        สกัดข้อความสุดท้าย คัดเลือกเนื้อหาที่มีประโยชน์มากที่สุดตอบเป็นข้อความเสร็จสมบูรณ์
-        
-        Args:
-            state (AgentState): ความจำปัจจุบันที่เก็บ vector_context และ graph_context มาแล้ว
-            
-        Returns:
-            Dict[str, Any]: Dictionary เพื่ออัปเดตช่อง final_answer
-        """
-        print("[Synthesizer Agent] ✍️ กำลังเรียบเรียงข้อมูลเพื่อตอบคำถาม...")
-        
-        # จัด Format ให้สวยๆ ก่อนส่งให้ LLM อ่าน
+    def _format_context(self, state: AgentState) -> Dict[str, str]:
+        """จัดรูปแบบบริบทให้สวยงามก่อนส่งให้ LLM (Internal use)"""
         v_context = ""
         if state.get("vector_context"):
             for i, d in enumerate(state["vector_context"]):
-                v_context += f"- เอกสารอ้างอิง {i+1}: {d.page_content}\n"
+                page = d.metadata.get('page', 'N/A')
+                v_context += f"- [หน้า {page}]: {d.page_content}\n"
                 
         g_context = ""
         if state.get("graph_context"):
             for i, g in enumerate(state["graph_context"]):
-                g_context += f"- กราฟความสัมพันธ์ {i+1}: {g}\n"
+                g_context += f"- {g}\n"
                 
+        return {
+            "vector_formatted": v_context or "ไม่มีข้อมูลเชิงลึกใน Vector",
+            "graph_formatted": g_context or "ไม่มีข้อมูลความสัมพันธ์ใน Graph"
+        }
+
+    def synthesize(self, state: AgentState) -> Dict[str, Any]:
+        """
+        สังเคราะห์คำตอบแบบปกติ (Blocking)
+        """
+        print("[Synthesizer Agent] ✍️ กำลังเรียบเรียงข้อมูลเพื่อตอบคำถาม...")
+        contexts = self._format_context(state)
+        
         response = self.chain.invoke({
             "question": state["question"],
-            "vector_context": v_context or "ไม่มีข้อมูลเชิงลึกใน Vector",
-            "graph_context": g_context or "ไม่มีข้อมูลความสัมพันธ์ใน Graph"
+            "vector_context": contexts["vector_formatted"],
+            "graph_context": contexts["graph_formatted"]
         })
         
         print("[Synthesizer Agent] ✨ ร่างคำตอบเสร็จสิ้น!")
         return {"final_answer": response.content}
 
-    async def synthesize_stream(self, state: AgentState):
+    async def synthesize_stream(self, state: AgentState) -> AsyncGenerator[str, None]:
         """
-        โหมดสตรีมมิ่ง: ส่งข้อความออกมาทีละชิ้น (Token) เพื่อให้หน้าจอแสดงผลได้รวดเร็วขึ้น
+        สังเคราะห์คำตอบแบบ Stream (Non-blocking)
         """
         print("[Synthesizer Agent] 🌊 กำลังเริ่มสตรีมคำตอบ...")
+        contexts = self._format_context(state)
         
-        v_context = ""
-        if state.get("vector_context"):
-            for i, d in enumerate(state["vector_context"]):
-                v_context += f"- อ้างอิงจากเอกสารหน้า {d.metadata.get('page', 'N/A')}: {d.page_content}\n"
-                
-        g_context = ""
-        if state.get("graph_context"):
-            for i, g in enumerate(state["graph_context"]):
-                # g is a dict from graph_store
-                g_context += f"- อ้างอิงจากความสัมพันธ์: {g}\n"
-        
-        # ใช้ .astream เพื่อดึงข้อมูลแบบ Async Generator
         async for chunk in self.chain.astream({
             "question": state["question"],
-            "vector_context": v_context or "ไม่มีข้อมูลเชิงลึกใน Vector",
-            "graph_context": g_context or "ไม่มีข้อมูลความสัมพันธ์ใน Graph"
+            "vector_context": contexts["vector_formatted"],
+            "graph_context": contexts["graph_formatted"]
         }):
             if chunk.content:
                 yield chunk.content

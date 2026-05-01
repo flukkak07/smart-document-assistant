@@ -1,60 +1,66 @@
+from typing import List, Literal, Union
 from langgraph.graph import StateGraph, START, END
+from langgraph.graph.state import CompiledStateGraph
 from src.agents.state import AgentState
 from src.agents.router_agent import RouterAgent
 from src.agents.retriever_agent import RetrieverAgent
 from src.agents.synthesizer_agent import SynthesizerAgent
 
-def create_workflow() -> StateGraph:
+def create_workflow() -> CompiledStateGraph:
     """
-    หัวใจหลักของการรวบรวม Agent ให้อยู่ภายใต้กรอบของ LangGraph
-    เสมือนการวาดพิมพ์เขียว (Flowchart) ว่าเมื่อมีคนพิมพ์คำถาม ระบบจะเดินรถไปทางไหนบ้าง
+    สร้างและตั้งค่าโครงสร้างการทำงาน (Workflow) ของ Multi-Agent System
+    โดยใช้ LangGraph ในการควบคุมลำดับการทำงาน (Orchestration)
+    
+    Returns:
+        CompiledStateGraph: กราฟสถานะที่พร้อมสำหรับการรันกระบวนการ RAG
     """
-    # 1. เริ่มวาดกระดานด้วยเทมเพลต State ที่เราประดิษฐ์ไว้
+    # 1. กำหนดโครงสร้างกราฟโดยอ้างอิงจาก AgentState
     workflow = StateGraph(AgentState)
     
-    # 2. ปลุกวิญญาณลูกน้องออกมาเตรียมพร้อม
+    # 2. เริ่มต้นอินสแตนซ์ของเอเจนท์ต่างๆ
     router = RouterAgent()
     retriever = RetrieverAgent()
     synthesizer = SynthesizerAgent()
     
-    # 3. สร้าง Node (จุดจอดรถ หรือด่านกระบวนการทำงาน)
+    # 3. เพิ่มโหนด (Node) เข้าไปในกราฟ
     workflow.add_node("router", router.route)
     workflow.add_node("vector_retriever", retriever.retrieve_vector)
     workflow.add_node("graph_retriever", retriever.retrieve_graph)
     workflow.add_node("synthesizer", synthesizer.synthesize)
     
-    # 4. ฟังก์ชันสำหรับคุมประแจสับรางรถไฟ (Conditional Routing)
-    def route_decision(state: AgentState):
+    # 4. นิยามฟังก์ชันสำหรับการตัดสินใจเลือกเส้นทาง (Conditional Routing)
+    def route_decision(state: AgentState) -> List[str]:
+        """
+        ฟังก์ชันสับรางรถไฟตามผลการตัดสินใจของ Router Agent
+        """
         decision = state.get("route_decision", "both")
         if decision == "vector":
             return ["vector_retriever"]
         elif decision == "graph":
             return ["graph_retriever"]
-        else:
-            return ["vector_retriever", "graph_retriever"]
+        return ["vector_retriever", "graph_retriever"]
 
-    # 5. ลากเส้นทางให้ระบบไหล (Edges)
+    # 5. เชื่อมต่อเส้นทาง (Edges)
     
-    # ด่าน 1: เริ่มต้น (START) ต้องวิ่งไปหา Router (แจกงาน) ก่อนเสมอ
+    # เริ่มต้นวิ่งไปหา Router เพื่อแจกจ่ายงาน
     workflow.add_edge(START, "router")
     
-    # ด่าน 2: Router สร้างทางแยก (Conditional Edges)
+    # Router ส่งงานไปยังแผนกค้นหาตามเงื่อนไขที่วิเคราะห์ได้
     workflow.add_conditional_edges(
-        "router",           # ปล่อยรถจากสถานี router
-        route_decision,     # ให้ฟังก์ชัน route_decision เป็นคนดูป้ายสับราง
+        "router",
+        route_decision,
         {
             "vector_retriever": "vector_retriever",
             "graph_retriever": "graph_retriever"
         }
     )
     
-    # ด่าน 3: เมื่อ Retriever หุ่นยนต์ไปดึงของมาเสร็จ ก็ต้องโยนมาให้ Synthesizer เป็นคนสรุปคำตอบ
+    # หลังจากค้นหาเสร็จ (ไม่ว่าจะจากทางไหน) ให้ส่งไปสรุปที่ Synthesizer
     workflow.add_edge("vector_retriever", "synthesizer")
     workflow.add_edge("graph_retriever", "synthesizer")
     
-    # ด่าน 4: Synthesizer ตอบเสร็จ ให้จบรอบการทำงานทันที (END)
+    # เมื่อ Synthesizer ตอบคำตอบสุดท้ายเสร็จ ให้สิ้นสุดการทำงาน
     workflow.add_edge("synthesizer", END)
     
-    # ห่อรวมทั้งหมดให้กลายเป็นฟังก์ชันพร้อมรัน (เหมือน Export โปรแกรม)
-    app = workflow.compile()
-    return app
+    # รวมและคอมไพล์เป็นโปรแกรมที่พร้อมทำงาน
+    return workflow.compile()
